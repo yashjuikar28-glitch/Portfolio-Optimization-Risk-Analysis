@@ -1,0 +1,162 @@
+import pandas as pd
+import numpy as np
+import datetime as dt
+import matplotlib.pyplot as plt
+import seaborn as sns
+import plotly.express as px
+import cufflinks as cf
+from seaborn import pairplot
+import random
+import plotly.graph_objects as go
+from scipy import stats
+
+cf.go_offline()
+close_price_df = pd.read_csv('stock_prices.csv')
+daily_returns_df = close_price_df.iloc[:, 1:].pct_change() * 100
+daily_returns_df = daily_returns_df.fillna(0)
+daily_returns_df.insert(0, "Date", close_price_df['Date'])
+close_price_df.describe().to_excel('stock_prices.xlsx')
+daily_returns_df.describe().to_excel('daily_returns.xlsx')
+
+mean_return = daily_returns_df.iloc[:, 1:].mean()
+std_return = daily_returns_df.iloc[:, 1:].std()
+cv = std_return/mean_return
+print(cv)
+
+
+def plot_financial_data(df, title):
+    fig = px.line(title=title)
+    for i in df.columns[1:]:
+        fig.add_scatter(x=df['Date'], y=df[i], name=i)
+        fig.update_traces(line_width=5)
+        fig.update_layout({'plot_bgcolor': "white"})
+    fig.show()
+
+plot_financial_data(close_price_df, 'Adjusted Closing Prices [$]')
+plot_financial_data(daily_returns_df, 'Percentage Daily Returns [%]')
+fig = px.histogram(daily_returns_df.drop(columns = ['Date']))
+fig.update_layout({'plot_bgcolor': "white"})
+fig.show()
+
+heatmaps = plt.figure(figsize = (10, 8))
+sns.heatmap(daily_returns_df.drop(columns = ['Date']).corr(), annot = True, cmap = 'crest');
+heatmaps.show()
+
+sns.pairplot(daily_returns_df);
+plt.show()
+
+def price_scaling(raw_prices_df):
+    scaled_prices_df = raw_prices_df.copy()
+    for i in raw_prices_df.columns[1:]:
+          scaled_prices_df[i] = raw_prices_df[i]/raw_prices_df[i][0]
+    return scaled_prices_df
+
+#plot_financial_data(price_scaling(close_price_df), "Scaled Stock Closing Price [$]")
+
+def generate_portfolio_weights(n):
+    weights = []
+    for i in range(n):
+        weights.append(random.random())
+    weights = weights/np.sum(weights)
+    return weights
+
+np.ones(10)
+weights = np.ones(10) * 0.1
+portfolio_df = close_price_df.copy()
+scaled_df = price_scaling(portfolio_df)
+
+initial_investment = 100000
+for i, stock in enumerate(scaled_df.columns[1:]):
+    portfolio_df[stock] = scaled_df[stock] * weights[i] * initial_investment
+
+def asset_allocation(df, weights, initial_investment):
+    portfolio_df = df.copy()
+    scaled_df = price_scaling(df)
+    for i, stock in enumerate(scaled_df.columns[1:]):
+        portfolio_df[stock] = scaled_df[stock] * weights[i] * initial_investment
+
+    portfolio_df['Portfolio Value [$]'] = portfolio_df[portfolio_df != 'Date'].sum(axis=1, numeric_only=True)
+    portfolio_df['Portfolio Daily Return [%]'] = portfolio_df['Portfolio Value [$]'].pct_change(1) * 100
+    portfolio_df.replace(np.nan, 0, inplace=True)
+    return portfolio_df
+
+n = len(close_price_df.columns)-1
+print('Number of stocks under consideration = {}'.format(n))
+#weights = generate_portfolio_weights(n).round(3)
+print('Portfolio weights = {}'.format(weights))
+
+portfolio_df = asset_allocation(close_price_df, weights, 100000)
+
+plot_financial_data(portfolio_df[['Date', 'Portfolio Daily Return [%]']], 'Portfolio Percentage Daily Return [%]')
+plot_financial_data(portfolio_df.drop(['Portfolio Value [$]', 'Portfolio Daily Return [%]'], axis = 1), 'Portfolio positions [$]')
+plot_financial_data(portfolio_df[['Date', 'Portfolio Value [$]']], 'Total Portfolio Value [$]')
+
+def simulation_engine(weights, initial_investment):
+    portfolio_df = asset_allocation(close_price_df, weights, initial_investment)
+    return_on_investment = ((portfolio_df['Portfolio Value [$]'][-1:] -
+                             portfolio_df['Portfolio Value [$]'][0]) /
+                            portfolio_df['Portfolio Value [$]'][0]) * 100
+    portfolio_daily_return_df = portfolio_df.drop(columns=['Date', 'Portfolio Value [$]', 'Portfolio Daily Return [%]'])
+    portfolio_daily_return_df = portfolio_daily_return_df.pct_change(1)
+    expected_portfolio_return = np.sum(weights * portfolio_daily_return_df.mean()) * 252
+    covariance = portfolio_daily_return_df.cov() * 252
+    expected_volatility = np.sqrt(np.dot(weights.T, np.dot(covariance, weights)))
+    rf = 0.0269
+    sharpe_ratio = (expected_portfolio_return - rf) / expected_volatility
+    confidence_interval = 0.05
+    var_5 = np.percentile(portfolio_daily_return_df.dropna(), 100 * confidence_interval)
+    return expected_portfolio_return, expected_volatility, sharpe_ratio, portfolio_df['Portfolio Value [$]'][-1:].values[0], return_on_investment.values[0], var_5
+
+np.ones(100)
+weights = np.ones(10) * 0.1
+#weights = [0.12, 0.14, 0.13, 0.04, 0.11, 0.1, 0.09, 0.1, 0.12, 0.05]
+#weights = np.array(weights)
+#print(weights)
+portfolio_metrics = simulation_engine(weights, initial_investment)
+print('Expected Portfolio Annual Return = {:.2f}%'.format(portfolio_metrics[0] * 100))
+print('Portfolio Standard Deviation (Volatility) = {:.2f}%'.format(portfolio_metrics[1] * 100))
+print('Sharpe Ratio = {:.2f}'.format(portfolio_metrics[2]))
+print('Portfolio Final Value = ${:.2f}'.format(portfolio_metrics[3]))
+print('Return on Investment = {:.2f}%'.format(portfolio_metrics[4]))
+print('5% VaR = {:.2f}%'.format(portfolio_metrics[5]*100))
+
+sim_runs = 1000
+initial_investment = 1000000
+weights_runs = np.zeros((sim_runs,n))
+sharpe_ratio_runs = np.zeros(sim_runs)
+expected_portfolio_returns_runs = np.zeros(sim_runs)
+volatility_runs = np.zeros(sim_runs)
+return_on_investment_runs = np.zeros(sim_runs)
+final_value_runs = np.zeros(sim_runs)
+var_runs = np.zeros(sim_runs)
+
+for i in range(sim_runs):
+    weights = generate_portfolio_weights(n)
+    weights_runs[i, :] = weights
+    expected_portfolio_returns_runs[i], volatility_runs[i], sharpe_ratio_runs[i], final_value_runs[i], \
+    return_on_investment_runs[i], var_runs[i] = simulation_engine(weights, initial_investment)
+    print("Simulation Run = {}".format(i))
+    print("Weights = {}, Final Value = ${:.2f}, Sharpe Ratio = {:.2f}".format(weights_runs[i].round(3),final_value_runs[i],sharpe_ratio_runs[i]))
+    print('\n')
+
+print("Minimum Sharpe Ratio = {:.2f}%".format(sharpe_ratio_runs.min().round(4)))
+print("Minimum Sharpe Ratio = {:.2f}%".format(sharpe_ratio_runs.max().round(4)))
+print("Final Value = {:.2f}".format(final_value_runs.max().round(2)))
+
+optimal_portfolio_return, optimal_volatility, optimal_sharpe_ratio, highest_final_value, optimal_return_on_investment, optimal_var_5 = simulation_engine(weights_runs[sharpe_ratio_runs.argmax(), :], initial_investment)
+print('Best Portfolio Metrics Based on {} Monte Carlo Simulation Runs:'.format(sim_runs))
+print('  - Portfolio Expected Annual Return = {:.02f}%'.format(optimal_portfolio_return * 100))
+print('  - Portfolio Standard Deviation (Volatility) = {:.02f}%'.format(optimal_volatility * 100))
+print('  - Sharpe Ratio = {:.02f}'.format(optimal_sharpe_ratio))
+print('  - Final Value = ${:.02f}'.format(highest_final_value))
+print('  - Return on Investment = {:.02f}%'.format(optimal_return_on_investment))
+print('  - VaR at 5% = {:.02f}%'.format(optimal_var_5))
+
+sim_out_df = pd.DataFrame({'Volatility': volatility_runs.tolist(), 'Portfolio Return': expected_portfolio_returns_runs.tolist(), 'Sharpe Ratio': sharpe_ratio_runs.tolist() })
+print(sim_out_df)
+fig = px.scatter(sim_out_df, x = 'Volatility', y = 'Portfolio Return', color = 'Sharpe Ratio', size = 'Sharpe Ratio', hover_data = ['Sharpe Ratio'] )
+fig.update_layout({'plot_bgcolor': "white"})
+fig.add_trace(go.Scatter(x = [optimal_volatility], y = [optimal_portfolio_return], mode = 'markers', name = 'Optimal Point', marker = dict(size=[40], color = 'red')))
+fig.update_layout(coloraxis_colorbar = dict(y = 0.7, dtick = 5))
+fig.update_layout({'plot_bgcolor': "white"})
+fig.show()
